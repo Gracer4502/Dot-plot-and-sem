@@ -97,7 +97,6 @@ if uploaded_file:
                 cap_width = 0.1  # 横線の長さ（左右に0.1ずつ広げる）
                 ax.vlines(x_center, y_mean - y_sem, y_mean + y_sem, color='black', lw=3)  # 縦線
                 ax.hlines([y_mean - y_sem, y_mean + y_sem], x_center - cap_width/2, x_center + cap_width/2, color='black', lw=3)  # キャップ
-                ax.hlines(y_mean, x_center - cap_width/2, x_center + cap_width/2, color='black', lw=3)  # 平均横線
 
         ax.set_xticks([x_positions_dict[k] for k in plot_groups])
         ax.set_xticklabels([st.session_state[k]["legend"] for k in plot_groups], rotation=45, ha='right')
