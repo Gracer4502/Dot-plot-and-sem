@@ -4,11 +4,13 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
 from matplotlib import colors as mcolors
+import io
 
 # --- フォント設定 ---
 plt.rcParams['font.size'] = 20
+plt.rcParams['font.family'] = ['Arial', 'DejaVu Sans', 'Liberation Sans', 'sans-serif']
 
-st.title("Dot Plot")
+st.title("堅牢版 Excel Dot Plot（重なり回避・均等配置・色/凡例編集）")
 
 # --- Excelアップロード ---
 uploaded_file = st.file_uploader("Excelファイルをアップロードしてください", type=["xlsx", "xls"])
@@ -39,43 +41,24 @@ if uploaded_file:
     y_max = st.number_input("縦軸最大値", value=float(y_max_val), step=1.0)
     y_step = st.number_input("縦軸目盛り間隔", value=(y_max - y_min_val)/10, step=0.1)
 
-    # --- 色設定 ---
-    unique_groups = df[x_col].unique()
-    color_dict = {}
-    for group in unique_groups:
+    # --- プロット群作成 ---
+    plot_groups = []
+    for g in df[x_col].unique():
         if sub_col:
-            subs = df[df[x_col]==group][sub_col].unique()
-            for idx, sub in enumerate(subs):
-                default_color = sns.color_palette("tab10")[idx % 10]
-                color_dict[(group, sub)] = st.color_picker(
-                    f"{group}-{sub} の色",
-                    value=mcolors.to_hex(default_color),
-                    key=f"{group}-{sub}"
-                )
+            for s in df[df[x_col]==g][sub_col].unique():
+                plot_groups.append((g, s))
         else:
-            idx = list(unique_groups).index(group)
-            default_color = sns.color_palette("tab10")[idx % 10]
-            color_dict[(group, None)] = st.color_picker(
-                f"{group} の色",
-                value=mcolors.to_hex(default_color),
-                key=f"{group}-main"
-            )
+            plot_groups.append((g, None))
 
-    # --- 凡例名編集 ---
-    legend_dict = {}
-    for group in unique_groups:
-        if sub_col:
-            subs = df[df[x_col]==group][sub_col].unique()
-            for sub in subs:
-                legend_name = st.text_input(f"{group}-{sub} の凡例名", value=f"{group}-{sub}", key=f"legend-{group}-{sub}")
-                legend_dict[(group, sub)] = legend_name
-        else:
-            legend_name = st.text_input(f"{group} の凡例名", value=f"{group}", key=f"legend-{group}")
-            legend_dict[(group, None)] = legend_name
+    # --- session_stateで色と凡例名保持 ---
+    for key in plot_groups:
+        if key not in st.session_state:
+            default_color = sns.color_palette("tab10")[0] if key[0] == df[x_col].unique()[0] else sns.color_palette("tab10")[1] if key[0] == df[x_col].unique()[1] else sns.color_palette("hsv", 64)[0]
+            st.session_state[key] = {"color": mcolors.to_hex(default_color),
+                                     "legend": f"{key[0]}-{key[1]}" if key[1] else f"{key[0]}"}
 
     # --- 重なり回避関数 ---
     def spread_y_vals(y_vals, x_center, spacing=0.05):
-        """同じ y 値が重なる場合、左右にずらす"""
         x_positions = np.full(len(y_vals), x_center)
         sorted_idx = np.argsort(y_vals)
         offsets = np.zeros(len(y_vals))
@@ -86,53 +69,64 @@ if uploaded_file:
                 offsets[i] = ((len(same_y_idx)+1)//2) * spacing
                 if len(same_y_idx) % 2 == 0:
                     offsets[i] *= -1
-        # 元の順序に戻す
         x_positions[sorted_idx] += offsets
         return x_positions
 
-    # --- 全体で均等配置するためのプロット群リスト ---
-    plot_groups = []
-    for group in unique_groups:
-        if sub_col:
-            subs = df[df[x_col]==group][sub_col].unique()
-            for sub in subs:
-                plot_groups.append((group, sub))
-        else:
-            plot_groups.append((group, None))
+    # --- 横並びレイアウト ---
+    graph_col, control_col = st.columns([3, 1])
 
     # --- x 座標を均等割り当て ---
     n_total = len(plot_groups)
     x_coords = np.linspace(0, n_total-1, n_total)
     x_positions_dict = {plot_groups[i]: x_coords[i] for i in range(n_total)}
 
-    # --- プロット ---
-    fig, ax = plt.subplots(figsize=(width, height))
-    for key in plot_groups:
-        group, sub = key
-        group_df = df[df[x_col]==group] if sub is None else df[(df[x_col]==group) & (df[sub_col]==sub)]
-        y_vals = pd.to_numeric(group_df[y_col], errors='coerce')
-        x_center = x_positions_dict[key]
-        x_vals = spread_y_vals(y_vals.values, x_center, spacing=0.05)
-        ax.scatter(x_vals, y_vals, color=color_dict[key], alpha=1.0, s=scatter_size)
-        # 平均とSEMを横線で表示
-        y_mean = y_vals.mean()
-        y_sem = y_vals.sem()
-        if not np.isnan(y_mean):
-            cap_width = 0.05  # キャップと同じ幅
-            # SEM の縦線
-            ax.vlines(x=x_center, ymin=y_mean - y_sem, ymax=y_mean + y_sem, color='black', linewidth=3)
-            # SEM の横キャップ
-            ax.hlines(y=y_mean - y_sem, xmin=x_center-cap_width, xmax=x_center+cap_width, color='black', linewidth=3)
-            ax.hlines(y=y_mean + y_sem, xmin=x_center-cap_width, xmax=x_center+cap_width, color='black', linewidth=3)
-    
-    # --- X軸ラベル ---
-    ax.set_xticks([x_positions_dict[k] for k in plot_groups])
-    ax.set_xticklabels([legend_dict[k] for k in plot_groups], rotation=45, ha='right')
+    # --- グラフ描画 ---
+    with graph_col:
+        fig, ax = plt.subplots(figsize=(width, height))
+        for key in plot_groups:
+            group, sub = key
+            group_df = df[df[x_col]==group] if sub is None else df[(df[x_col]==group) & (df[sub_col]==sub)]
+            y_vals = pd.to_numeric(group_df[y_col], errors='coerce')
+            x_center = x_positions_dict[key]
+            x_vals = spread_y_vals(y_vals.values, x_center, spacing=0.05)
+            ax.scatter(x_vals, y_vals, color=st.session_state[key]["color"], alpha=1.0, s=scatter_size)
 
-    ax.set_ylim(0, y_max)
-    ax.set_ylabel(y_col)
-    ax.set_xlabel(x_col)
-    ax.set_yticks(np.arange(0, y_max + y_step, y_step))
-    ax.grid(axis='y', linestyle='--', alpha=0.5)
+            # 平均とSEMを描画
+            y_mean = y_vals.mean()
+            y_sem = y_vals.sem()
+            if not np.isnan(y_mean):
+                cap_width = 0.1  # 横線の長さ（左右に0.1ずつ広げる）
+                ax.vlines(x_center, y_mean - y_sem, y_mean + y_sem, color='black', lw=3)  # 縦線
+                ax.hlines([y_mean - y_sem, y_mean + y_sem], x_center - cap_width/2, x_center + cap_width/2, color='black', lw=3)  # キャップ
+                ax.hlines(y_mean, x_center - cap_width/2, x_center + cap_width/2, color='black', lw=3)  # 平均横線
 
-    st.pyplot(fig)
+        ax.set_xticks([x_positions_dict[k] for k in plot_groups])
+        ax.set_xticklabels([st.session_state[k]["legend"] for k in plot_groups], rotation=45, ha='right')
+        ax.set_ylim(0, y_max)
+        ax.set_ylabel(y_col)
+        ax.set_xlabel(x_col)
+        ax.set_yticks(np.arange(0, y_max + y_step, y_step))
+        ax.grid(axis='y', linestyle='--', alpha=0.5)
+        st.pyplot(fig)
+
+        # --- PNG / PDFダウンロード ---
+        buf_png = io.BytesIO()
+        fig.savefig(buf_png, format="png", bbox_inches="tight")
+        buf_png.seek(0)
+        buf_pdf = io.BytesIO()
+        fig.savefig(buf_pdf, format="pdf", bbox_inches="tight")
+        buf_pdf.seek(0)
+
+        st.download_button("PNGで保存", data=buf_png, file_name="dot_plot.png", mime="image/png")
+        st.download_button("PDFで保存", data=buf_pdf, file_name="dot_plot.pdf", mime="application/pdf")
+
+    # --- 色と凡例名編集パネル ---
+    with control_col:
+        st.write("### 色と凡例名の選択")
+        for key in plot_groups:
+            group, sub = key
+            st.write(f"**{group}-{sub}**" if sub else f"**{group}**")
+            selected_color = st.color_picker("色", value=st.session_state[key]["color"], key=f"color_{key}")
+            st.session_state[key]["color"] = selected_color
+            legend_name = st.text_input("凡例名", value=st.session_state[key]["legend"], key=f"legend_{key}")
+            st.session_state[key]["legend"] = legend_name
