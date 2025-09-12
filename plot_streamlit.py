@@ -8,9 +8,8 @@ import io
 
 # --- フォント設定 ---
 plt.rcParams['font.size'] = 20
-plt.rcParams['font.family'] = ['Arial', 'DejaVu Sans', 'Liberation Sans', 'sans-serif']
 
-st.title("堅牢版 Excel Dot Plot（重なり回避・均等配置・色/凡例編集）")
+st.title("Excel Dot Plot")
 
 # --- Excelアップロード ---
 uploaded_file = st.file_uploader("Excelファイルをアップロードしてください", type=["xlsx", "xls"])
