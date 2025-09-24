@@ -1,130 +1,130 @@
 import streamlit as st
 import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
 import numpy as np
-from matplotlib import colors as mcolors
+import seaborn as sns
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 import io
 
-# --- フォント設定 ---
-plt.rcParams['font.size'] = 20
+st.set_page_config(layout="wide")
 
-st.title("Excel Dot Plot")
+# --- データアップロード ---
+uploaded_file = st.file_uploader("CSVまたはExcelをアップロード", type=['csv', 'xlsx'])
+if uploaded_file is None:
+    st.warning("ファイルをアップロードしてください")
+    st.stop()
+else:
+    if uploaded_file.name.endswith('.csv'):
+        df = pd.read_csv(uploaded_file)
+    else:
+        df = pd.read_excel(uploaded_file)
 
-# --- Excelアップロード ---
-uploaded_file = st.file_uploader("Excelファイルをアップロードしてください", type=["xlsx", "xls"])
-if uploaded_file:
-    df = pd.read_excel(uploaded_file)
-    st.write("データプレビュー", df)
+# --- カラム選択 ---
+cols = df.columns.tolist()
+x_col = st.sidebar.selectbox("メイングループ列", options=cols, index=0)
+subgroup_col = st.sidebar.selectbox("サブグループ列", options=cols, index=1)
+y_col = st.sidebar.selectbox("値列", options=cols, index=2)
 
-    # --- 列選択 ---
-    all_columns = df.columns.tolist()
-    x_col = st.selectbox("メイングループ列", all_columns)
-    y_col = st.selectbox("値の列", all_columns)
-    sub_col_option = st.selectbox("サブグループ列（任意）", [None] + all_columns)
-    sub_col = sub_col_option if sub_col_option != "None" else None
+# --- グラフ設定 ---
+bar_width = st.sidebar.slider("Bar width", 0.5, 1.0, 0.7)
+dot_size = st.sidebar.slider("Dot size", 2, 20, 6)
+xtick_fontsize = st.sidebar.slider("X-axis font size", 8, 20, 12)
+ytick_fontsize = st.sidebar.slider("Y-axis font size", 8, 20, 12)
+fig_width = st.sidebar.slider("Figure width", 1, 10, 5)
+fig_height = st.sidebar.slider("Figure height", 3, 12, 5)
 
-    # --- ドットサイズ ---
-    scatter_size = st.slider("ドットサイズ", 10, 500, 100, 10)
+# Y軸 maxとステップ
+y_max = st.sidebar.number_input("Y axis max", value=int(df[y_col].max() * 1.2))
+y_step = st.sidebar.number_input("Y axis step", value=1)
 
-    # --- 縦横比 ---
-    width = st.slider("グラフ幅", 4, 20, 10)
-    height = st.slider("グラフ高さ", 4, 20, 12)
+# 棒の枠線太さとSEMの太さ
+line_width = st.sidebar.slider("Bar & SEM line width", 0.5, 5.0, 2.0)
+sem_cap_size = line_width
+sem_cap_length = st.sidebar.slider("SEM cap length", 2, 20, 6)
 
-    # --- Y軸設定 ---
-    y_numeric = pd.to_numeric(df[y_col], errors='coerce').dropna()
-    if len(y_numeric) == 0:
-        st.error(f"{y_col} に数値データがありません。")
-        st.stop()
-    y_min_val, y_max_val = y_numeric.min(), y_numeric.max()
-    y_max = st.number_input("縦軸最大値", value=float(y_max_val), step=1.0)
-    y_step = st.number_input("縦軸目盛り間隔", value=(y_max - y_min_val)/10, step=0.1)
+# 軸ラベル
+x_label = st.sidebar.text_input("X軸ラベル（空欄ならなし）", value=x_col)
+y_label = st.sidebar.text_input("Y軸ラベル（空欄ならなし）", value=y_col)
 
-    # --- プロット群作成 ---
-    plot_groups = []
-    for g in df[x_col].unique():
-        if sub_col:
-            for s in df[df[x_col]==g][sub_col].unique():
-                plot_groups.append((g, s))
-        else:
-            plot_groups.append((g, None))
+# --- メイングループ×サブグループ色・ラベル設定 ---
+col1, col2 = st.columns([3, 1])
+with col2:
+    group_combos = df[[x_col, subgroup_col]].drop_duplicates().values.tolist()
+    combo_labels = {}
+    combo_colors = {}
 
-    # --- session_stateで色と凡例名保持 ---
-    for key in plot_groups:
-        if key not in st.session_state:
-            default_color = sns.color_palette("tab10")[0] if key[0] == df[x_col].unique()[0] else sns.color_palette("tab10")[1] if key[0] == df[x_col].unique()[1] else sns.color_palette("hsv", 64)[0]
-            st.session_state[key] = {"color": mcolors.to_hex(default_color),
-                                     "legend": f"{key[0]}-{key[1]}" if key[1] else f"{key[0]}"}
+    for i, (g, sg) in enumerate(group_combos):
+        combo_key = f"{g} | {sg}"
+        # サブグループを薄い順に色設定
+        default_color = mcolors.to_hex(sns.color_palette("tab20")[i % 20])
+        combo_colors[(g, sg)] = st.color_picker(f"{combo_key} の色", value=default_color, key=f"color_{combo_key}")
+        combo_labels[(g, sg)] = st.text_area(f"{combo_key} の凡例名（改行OK）", value=f"{g}\n{sg}", key=f"label_{combo_key}")
 
-    # --- 重なり回避関数 ---
-    def spread_y_vals(y_vals, x_center, spacing=0.05):
-        x_positions = np.full(len(y_vals), x_center)
-        sorted_idx = np.argsort(y_vals)
-        offsets = np.zeros(len(y_vals))
-        y_sorted = y_vals[sorted_idx]
-        for i in range(1, len(y_sorted)):
-            same_y_idx = np.where(y_sorted[:i] == y_sorted[i])[0]
-            if len(same_y_idx) > 0:
-                offsets[i] = ((len(same_y_idx)+1)//2) * spacing
-                if len(same_y_idx) % 2 == 0:
-                    offsets[i] *= -1
-        x_positions[sorted_idx] += offsets
-        return x_positions
+# --- Group_Label列 ---
+df["Group_Label"] = df.apply(
+    lambda row: combo_labels.get((row[x_col], row[subgroup_col]), f"{row[x_col]}\n{row[subgroup_col]}"),
+    axis=1
+)
 
-    # --- 横並びレイアウト ---
-    graph_col, control_col = st.columns([3, 1])
+# --- デフォルト順序 ---
+main_order_default = sorted(df[x_col].unique(), reverse=True)
+sub_order_default = sorted(df[subgroup_col].unique())
+main_order = st.sidebar.multiselect("メイングループ順序", options=main_order_default, default=main_order_default)
+sub_order = st.sidebar.multiselect("サブグループ順序", options=sub_order_default, default=sub_order_default)
 
-    # --- x 座標を均等割り当て ---
-    n_total = len(plot_groups)
-    x_coords = np.linspace(0, n_total-1, n_total)
-    x_positions_dict = {plot_groups[i]: x_coords[i] for i in range(n_total)}
+# --- グラフ描画 ---
+with col1:
+    fig, ax = plt.subplots(figsize=(fig_width, fig_height))
 
-    # --- グラフ描画 ---
-    with graph_col:
-        fig, ax = plt.subplots(figsize=(width, height))
-        for key in plot_groups:
-            group, sub = key
-            group_df = df[df[x_col]==group] if sub is None else df[(df[x_col]==group) & (df[sub_col]==sub)]
-            y_vals = pd.to_numeric(group_df[y_col], errors='coerce')
-            x_center = x_positions_dict[key]
-            x_vals = spread_y_vals(y_vals.values, x_center, spacing=0.05)
-            ax.scatter(x_vals, y_vals, color=st.session_state[key]["color"], alpha=1.0, s=scatter_size)
+    # 平均+SEM
+    grouped = df.groupby([x_col, subgroup_col])[y_col].agg(['mean', 'sem']).reset_index()
+    grouped["Group_Label"] = grouped.apply(
+        lambda row: combo_labels.get((row[x_col], row[subgroup_col]), f"{row[x_col]}\n{row[subgroup_col]}"),
+        axis=1
+    )
+    grouped[x_col] = pd.Categorical(grouped[x_col], categories=main_order, ordered=True)
+    grouped[subgroup_col] = pd.Categorical(grouped[subgroup_col], categories=sub_order, ordered=True)
+    grouped = grouped.sort_values([x_col, subgroup_col])
 
-            # 平均とSEMを描画
-            y_mean = y_vals.mean()
-            y_sem = y_vals.sem()
-            if not np.isnan(y_mean):
-                cap_width = 0.1  # 横線の長さ（左右に0.1ずつ広げる）
-                ax.vlines(x_center, y_mean - y_sem, y_mean + y_sem, color='black', lw=3)  # 縦線
-                ax.hlines([y_mean - y_sem, y_mean + y_sem], x_center - cap_width/2, x_center + cap_width/2, color='black', lw=3)  # キャップ
+    for _, row in grouped.iterrows():
+        edge_col = combo_colors.get((row[x_col], row[subgroup_col]), "black")
+        ax.bar(row["Group_Label"], row["mean"], width=bar_width, edgecolor=edge_col,
+               fill=False, linewidth=line_width)
+        ax.errorbar(row["Group_Label"], row["mean"], yerr=row["sem"],
+                    color='black', capsize=sem_cap_length, fmt='none',
+                    linewidth=line_width, elinewidth=line_width)  # キャップ太さに反映
 
-        ax.set_xticks([x_positions_dict[k] for k in plot_groups])
-        ax.set_xticklabels([st.session_state[k]["legend"] for k in plot_groups], rotation=45, ha='right')
-        ax.set_ylim(0, y_max)
-        ax.set_ylabel(y_col)
-        ax.set_xlabel(x_col)
-        ax.set_yticks(np.arange(0, y_max + y_step, y_step))
-        ax.grid(axis='y', linestyle='--', alpha=0.5)
-        st.pyplot(fig)
+    # スウォームプロット
+    palette_map = {row["Group_Label"]: combo_colors.get((row[x_col], row[subgroup_col]), "black")
+                   for _, row in df.iterrows()}
 
-        # --- PNG / PDFダウンロード ---
-        buf_png = io.BytesIO()
-        fig.savefig(buf_png, format="png", bbox_inches="tight")
-        buf_png.seek(0)
-        buf_pdf = io.BytesIO()
-        fig.savefig(buf_pdf, format="pdf", bbox_inches="tight")
-        buf_pdf.seek(0)
+    sns.swarmplot(
+        data=df, x="Group_Label", y=y_col,
+        hue="Group_Label",
+        palette=palette_map, dodge=False,
+        ax=ax, size=dot_size, legend=False
+    )
 
-        st.download_button("PNGで保存", data=buf_png, file_name="dot_plot.png", mime="image/png")
-        st.download_button("PDFで保存", data=buf_pdf, file_name="dot_plot.pdf", mime="application/pdf")
+    # 軸設定
+    plt.setp(ax.get_xticklabels(), fontsize=xtick_fontsize)
+    ax.set_ylim(0, y_max)
+    ax.set_yticks(np.arange(0, y_max + y_step, y_step))
+    ax.tick_params(axis='y', labelsize=ytick_fontsize)
 
-    # --- 色と凡例名編集パネル ---
-    with control_col:
-        st.write("### 色と凡例名の選択")
-        for key in plot_groups:
-            group, sub = key
-            st.write(f"**{group}-{sub}**" if sub else f"**{group}**")
-            selected_color = st.color_picker("色", value=st.session_state[key]["color"], key=f"color_{key}")
-            st.session_state[key]["color"] = selected_color
-            legend_name = st.text_input("凡例名", value=st.session_state[key]["legend"], key=f"legend_{key}")
-            st.session_state[key]["legend"] = legend_name
+    # 軸ラベル（フォントサイズ連動）
+    ax.set_xlabel(x_label if x_label else "", fontsize=xtick_fontsize)
+    ax.set_ylabel(y_label if y_label else "", fontsize=ytick_fontsize)
+
+    st.pyplot(fig)
+
+    # --- 保存用 ---
+    buf_png = io.BytesIO()
+    fig.savefig(buf_png, format='png', bbox_inches='tight')
+    buf_png.seek(0)
+    st.download_button("Download PNG", data=buf_png, file_name="dotplot.png", mime="image/png")
+
+    buf_pdf = io.BytesIO()
+    fig.savefig(buf_pdf, format='pdf', bbox_inches='tight')
+    buf_pdf.seek(0)
+    st.download_button("Download PDF", data=buf_pdf, file_name="dotplot.pdf", mime="application/pdf")
+
