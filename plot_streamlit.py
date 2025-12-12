@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import seaborn as sns
+import io
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 
@@ -57,6 +58,12 @@ if subgroup_col == "None":
 
 y_col = st.sidebar.selectbox("値列", options=cols, index=1)
 
+# y_col を強制的に数値化（エラー値は NaN）
+df_filtered[y_col] = pd.to_numeric(df_filtered[y_col], errors='coerce')
+
+# 数値以外の行を落とす
+df_filtered = df_filtered.dropna(subset=[y_col])
+
 # =========================================================================
 #                             グラフ設定
 # =========================================================================
@@ -67,7 +74,16 @@ ytick_fontsize = st.sidebar.slider("Y-axis font size", 8, 20, 12)
 fig_width = st.sidebar.number_input("Figure width", value=6.0, min_value=0.1, step=0.1, format="%.2f")
 fig_height = st.sidebar.number_input("Figure height", value=6.0, min_value=0.1, step=0.1, format="%.2f")
 
-y_max = st.sidebar.number_input("Y axis max", value=int(df_filtered[y_col].max() * 1.2))
+# ---- Safe calculation for y_max default ----
+y_max_val = df_filtered[y_col].max()
+
+# NaN 対策：値が NaN の場合は 1 にする（任意で変更可能）
+if np.isnan(y_max_val):
+    y_max_val = 1.0
+
+y_max = st.sidebar.number_input("Y axis max", value=float(y_max_val * 1.2))
+
+#y_max = st.sidebar.number_input("Y axis max", value=int(df_filtered[y_col].max() * 1.2))
 y_step = st.sidebar.number_input("Y axis step", value=1.0, min_value=0.0001, step=0.1, format="%.4f")
 
 line_width = st.sidebar.slider("Bar & SEM line width", 0.5, 10.0, 3.0)
@@ -202,10 +218,25 @@ with col1:
 
     st.pyplot(fig)
 
-    # --- 保存 ---
-    save_format = st.radio("保存形式", options=["png", "pdf"])
-    save_name = st.text_input("保存ファイル名（拡張子不要）", value="graph")
-    if st.button("保存"):
-        filename = f"{save_name}.{save_format}"
-        fig.savefig(filename, bbox_inches='tight')
-        st.success(f"{filename} として保存しました。")
+    # --------------------
+    # ダウンロード機能（ボタン1つで完結）
+    # --------------------
+    save_name = st.text_input("保存ファイル名（拡張子不要）", value="graph", key="save_name_input")
+    save_format = st.radio("保存形式を選択", ["png", "pdf", "svg"], key="save_format_radio2")
+
+    download_filename = f"{save_name}.{save_format}"
+
+    # ダウンロードボタン
+    if st.button("ダウンロード"):
+        # バッファに画像を書き込み
+        buf = io.BytesIO()
+        plt.savefig(buf, format=save_format, dpi=300, bbox_inches="tight")
+        buf.seek(0)
+
+        # download_button を即時表示して自動ダウンロード
+        st.download_button(
+            label="ファイルをダウンロード",
+            data=buf,
+            file_name=download_filename,
+            mime=f"image/{save_format}",
+        )
